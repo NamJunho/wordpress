@@ -1,0 +1,1099 @@
+function custom_post_list_v2_shortcode($atts) {
+    ob_start();
+
+    // 기본 속성 설정
+    $atts = shortcode_atts([
+        'posts_per_page' => 6, // 한 번에 불러올 글 개수
+        'category' => '', // 카테고리 필터 (빈값=전체, 슬러그 또는 ID)
+    ], $atts);
+
+    $query_args = [
+        'post_type'      => 'post',
+        'posts_per_page' => $atts['posts_per_page'],
+        'post_status'    => 'publish',
+        'paged'          => 1, // 첫 번째 페이지
+    ];
+
+    // 카테고리 파라미터 처리
+    if (!empty($atts['category'])) {
+        // 쉼표로 구분된 여러 카테고리 처리
+        $categories = array_map('trim', explode(',', $atts['category']));
+        
+        // 숫자인지 문자인지 확인하여 적절한 필드 사용
+        if (is_numeric($categories[0])) {
+            // ID로 카테고리 지정
+            $query_args['cat'] = implode(',', $categories);
+        } else {
+            // 슬러그로 카테고리 지정
+            $query_args['category_name'] = implode(',', $categories);
+        }
+    }
+
+    $query = new WP_Query($query_args);
+    $total_posts = $query->found_posts; // 전체 게시글 개수
+    $has_more_posts = ($total_posts > $atts['posts_per_page']); // 추가 글이 있는지 확인
+
+    ?>
+    <style>
+    .custom-post-list {
+        max-width: 1200px; /* 너비 증가 */
+        margin: 0 auto;
+    }
+    
+    /* 포스트 리스트 컨테이너 */
+    .post-list-container {
+        overflow: hidden;
+    }
+    
+    /* 헤더 스타일 */
+    .post-list-header {
+        display: flex;
+        border-bottom: 3px solid #ddd;
+        font-weight: 500;
+        font-size: 16px;
+		color: #777;
+    }
+    
+    .post-list-header .header-col {
+		padding: 16px;
+        white-space: nowrap;
+        display: flex;
+        align-items: center;
+    }
+    
+    /* 헤더 컬럼별 정렬 설정 */
+    .post-list-header .header-col.col-title {
+        justify-content: flex-start; /* 제목은 왼쪽 정렬 */
+    }
+    
+    .post-list-header .header-col.col-comments, 
+    .post-list-header .header-col.col-likes,
+    .post-list-header .header-col.col-views,
+    .post-list-header .header-col.col-date {
+        justify-content: center; /* 나머지는 가운데 정렬 */
+    }
+    
+    .post-list-header .header-col:last-child {
+        border-right: none;
+    }
+    
+    /* 포스트 목록 본문 */
+    .post-list-body {
+        display: flex;
+        flex-direction: column;
+    }
+    
+    /* 개별 포스트 행 */
+    .post-row {
+        display: flex;
+        border-bottom: 1px solid #ebebeb;
+        transition: background-color 0.2s ease;
+        min-height: 60px;
+        align-items: center;
+    }
+    
+    .post-row:last-child {
+        border-bottom: none;
+    }
+    
+    /* 컬럼 스타일 */
+    .post-col {
+        padding: 16px 20px;
+        display: flex;
+        align-items: center;
+    }
+    
+    .post-col:last-child {
+        border-right: none;
+    }
+    
+    /* 수정된 컬럼 너비 설정 */
+    .col-title {
+        flex: 1;
+        min-width: 350px; /* 아바타와 카테고리 포함을 위해 너비 증가 */
+        display: flex;
+        align-items: center;
+        gap: 20px; /* 아바타와 텍스트 사이 간격 */
+    }
+    
+    .col-comments {
+        width: 90px;
+        justify-content: center;
+    }
+    
+    .col-likes {
+        width: 90px;
+        justify-content: center;
+    }
+
+    .col-views {
+        width: 90px;
+        justify-content: center;
+    }
+
+    .col-date {
+        width: 110px;
+        justify-content: center;
+        white-space: nowrap;
+    }
+    
+    /* 제목 컨텐츠 */
+    .title-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    
+    /* 제목 스타일 - 수정된 부분 */
+    .post-title {
+        font-size: 18px;
+        font-weight: 500;
+        line-height: 1.3;
+        color: #333;
+        margin: 0;
+        cursor: pointer;
+        transition: color 0.2s ease;
+        text-decoration: none;
+        display: inline; /* PC에서는 인라인으로 텍스트만 클릭 가능 */
+        word-break: break-word; /* 긴 단어도 줄바꿈 */
+        width: auto; /* 텍스트 너비만큼만 클릭 영역 */
+    }
+    
+    /* 카테고리 스타일 */
+    .post-category {
+        display: inline-block;
+        color: #777;
+        font-size: 12px;
+        font-weight: 400;
+        max-width: 120px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    
+    /* 아바타 스타일 - 간소화 */
+    .author-avatar {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        object-fit: cover;
+        cursor: pointer;
+        transition: transform 0.2s ease;
+        display: block;
+        flex-shrink: 0; /* 아바타 크기 고정 */
+    }
+    
+    /* 아바타 컨테이너 */
+    .author-avatar-container {
+        position: relative;
+        flex-shrink: 0;
+    }
+    
+    /* 통계 스타일 */
+    .stat-number {
+        font-size: 18px;
+        font-weight: 500;
+        color: #777;
+    }
+    
+    .wp-comment-count,
+    .wp-likes-count,
+    .wp-view-count {
+        display: inline-block !important;
+        color: #777 !important;
+        font-size: 16px !important;
+        font-weight: 500 !important;
+    }
+    
+    /* 날짜 스타일 */
+    .post-date {
+        color: #777;
+        font-size: 16px;
+        font-weight: 500;
+    }
+    
+    /* 사용자 모달 스타일 - PC */
+    .user-modal {
+        position: fixed;
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        padding: 16px;
+        min-width: 200px;
+        z-index: 1000;
+        display: none;
+    }
+    
+    .user-modal.show {
+        display: block;
+    }
+    
+    /* 모바일 모달 오버레이 */
+    .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 999;
+        display: none;
+    }
+    
+    .modal-overlay.show {
+        display: block;
+    }
+    
+    .modal-avatar {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 2px solid #f1f1f1;
+        display: block;
+        margin: 0 auto 12px auto;
+    }
+    
+    .modal-display-name {
+        font-size: 16px;
+        font-weight: 600;
+        color: #333;
+        text-align: center;
+        margin-bottom: 4px;
+    }
+    
+    .modal-nickname {
+        font-size: 14px;
+        color: #666;
+        text-align: center;
+        margin-bottom: 8px;
+    }
+    
+    .modal-description {
+        font-size: 12px;
+        color: #888;
+        line-height: 1.4;
+        text-align: center;
+        min-height: 16px;
+        margin-bottom: 12px;
+    }
+    
+    .modal-button {
+        background: #0073aa;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        padding: 8px 16px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+        width: 100%;
+        text-align: center;
+    }
+    
+    .modal-button:hover {
+        background: #005a87;
+    }
+    
+    /* 로딩 스피너 스타일 */
+    #loading-indicator {
+        display: none;
+        text-align: center;
+        padding: 20px;
+    }
+    
+    .loading-spinner {
+        display: inline-block;
+        width: 36px;
+        height: 36px;
+        border: 3.5px solid #b6b6b6;
+        border-top: 3.5px solid #fff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto;
+    }
+    
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    /* PC 환경에서 제목 클릭 영역 제한 */
+    @media (min-width: 769px) {
+        .post-title {
+            display: inline !important;
+            width: auto !important;
+            max-width: none !important;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: initial;
+            -webkit-line-clamp: unset;
+            line-clamp: unset;
+            -webkit-box-orient: initial;
+        }
+        
+        .title-content {
+            align-items: flex-start;
+        }
+    }
+    @media (max-width: 768px) {
+		
+		.custom-post-list {
+			padding: 0;
+		}
+		
+        /* 헤더 숨기기 */
+        .post-list-header {
+            display: none;
+        }
+        
+        /* 포스트 행을 모바일 레이아웃으로 변경 */
+        .post-row {
+            display: flex;			
+            align-items: flex-start;
+			padding: 20px 10px 20px 12px !important;
+			margin: 0 10px;
+            gap:12px;
+        }
+        
+        /* 아바타 컬럼 */
+        .col-title .author-avatar-container {
+            flex-shrink: 0;
+			align-self: flex-start;
+        }
+        
+        .col-title .author-avatar {
+            width: 40px;
+            height: 40px;
+			cursor: default;
+        }
+        
+        /* 제목 컬럼 - 모바일에서 flex 레이아웃 */
+        .col-title {
+            flex: 1;
+            display: flex;
+            gap: 14px;
+            padding: 0;
+            min-width: 0;
+        }
+        
+        /* 제목 컨텐츠 */
+        .col-title .title-content {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        /* 제목 스타일 */
+        .post-title {
+			font-size: 19px !important;
+            margin-bottom: 6px;
+			padding-right: 30px;
+            line-height: 1.3;
+            display: -webkit-box; /* 모바일에서 2줄 말줄임표 적용 */
+            -webkit-line-clamp: 2;
+            line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            word-break: break-word;
+        }
+        
+        /* 모바일 클릭 영역의 제목 */
+        .mobile-clickable-area .post-title {
+            color: #333;
+            text-decoration: none;
+			cursor: default;
+        }
+        
+        /* 모바일 메타정보 컨테이너 */
+        .mobile-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+			font-weight: 400;
+            color: #777;
+            line-height: 1;
+        }
+        
+        .mobile-meta .post-category {
+            font-size: 14px;
+			font-weight: 400;
+            color: #777;
+        }
+        
+        .mobile-meta .post-date {
+            font-size: 14px;
+			font-weight: 400;
+            color: #777;
+        }
+        
+        /* 점 구분자 스타일 */
+        .meta-separator {
+            width: 2px;
+            height: 2px;
+            background-color: #999;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        
+        /* 모바일에서 클릭 가능한 영역 */
+        .mobile-clickable-area {
+            display: flex;
+            flex: 1;
+            align-items: flex-start;
+            gap: 12px;
+            text-decoration: none;
+            color: inherit;
+            min-width: 0;
+			cursor: default;
+        }
+        
+        .mobile-clickable-area:hover {
+            text-decoration: none;
+        }
+        
+        .mobile-clickable-area .title-content {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        /* 숨길 컬럼들 */
+        .col-likes,
+        .col-views,
+        .col-date {
+            display: none !important;
+        }
+        
+        /* 댓글 컬럼은 모바일에서도 표시 (클릭 영역에 포함됨) */
+        .col-comments {
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            width: auto;
+            padding: 0;
+        }
+        
+        .col-comments .wp-comment-count {
+            font-size: 20px !important;
+            color: #777 !important;
+            font-weight: 600 !important;
+        }
+        
+        /* 모바일에서 모달은 하단 고정 */
+        .user-modal {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            width: 100%;
+            max-width: none;
+            min-width: auto;
+            border-radius: 16px 16px 0 0;
+            transform: none;
+            margin: 0;
+            z-index: 1001;
+            padding: 20px;
+        }
+    }
+    
+    /* 매우 작은 화면에서 추가 최적화 */
+    @media (max-width: 480px) {
+        .post-row {
+            padding: 12px;
+        }
+        
+        .col-title .author-avatar {
+            width: 36px;
+            height: 36px;
+        }
+        
+        .post-title {
+            font-size: 15px;
+        }
+        
+        .mobile-meta {
+            font-size: 12px;
+        }
+    }
+    </style>
+
+    <div id="custom-post-list" class="custom-post-list" data-posts-per-page="<?php echo esc_attr($atts['posts_per_page']); ?>" data-category="<?php echo esc_attr($atts['category']); ?>" data-page="1">
+        
+        <div class="post-list-container">
+            <!-- 헤더 -->
+            <div class="post-list-header">
+                <div class="header-col col-title">제목</div>
+                <div class="header-col col-comments">댓글</div>
+                <div class="header-col col-likes">추천</div>
+                <div class="header-col col-views">조회수</div>
+                <div class="header-col col-date">작성일</div>
+            </div>
+            
+            <!-- 포스트 목록 본문 -->
+            <div class="post-list-body" id="post-list-body">
+                <?php
+                if ($query->have_posts()) {
+                    while ($query->have_posts()) {
+                        $query->the_post();
+                        $post_id = get_the_ID();
+                        $title = get_the_title();
+                        $author_id = get_the_author_meta('ID');
+                        $author_name = get_the_author();
+                        $author_display_name = get_the_author_meta('display_name', $author_id);
+                        $author_nickname = get_the_author_meta('nickname', $author_id);
+                        $author_description = get_the_author_meta('description', $author_id);
+                        $author_url = home_url('/@' . $author_nickname);
+                        
+                        // 카테고리 정보 가져오기
+                        $categories = get_the_category($post_id);
+                        $category_name = '';
+                        $category_url = '';
+                        if (!empty($categories)) {
+                            $main_category = $categories[0]; // 첫 번째 카테고리 사용
+                            $category_name = $main_category->name;
+                            $category_url = get_category_link($main_category->term_id);
+                        }
+                        
+                        // 커스텀 아바타 시스템 사용
+                        $custom_avatar = get_user_meta($author_id, 'custom_avatar', true);
+                        if ($custom_avatar) {
+                            $author_avatar = $custom_avatar;
+                        } else {
+                            // 커스텀 아바타가 없으면 기본 아바타 사용
+                            $avatar_html = get_avatar($author_id, 64);
+                            preg_match('/src="([^"]+)"/', $avatar_html, $avatar_matches);
+                            $author_avatar = !empty($avatar_matches[1]) ? $avatar_matches[1] : 'data:image/svg+xml;base64,' . base64_encode('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><circle fill="#ddd" cx="32" cy="32" r="32"/><circle fill="#999" cx="32" cy="24" r="8"/><ellipse fill="#999" cx="32" cy="50" rx="12" ry="8"/></svg>');
+                        }
+                        
+                        $time_diff = human_time_diff(get_the_time('U'), current_time('timestamp'));
+                        $permalink = get_permalink();
+                        ?>
+
+                        <div class="post-row">
+                            <div class="post-col col-title">
+                                <!-- 아바타 -->
+                                <div class="author-avatar-container">
+                                    <img src="<?php echo esc_url($author_avatar); ?>" 
+                                         alt="<?php echo esc_attr($author_name); ?>" 
+                                         class="author-avatar"
+                                         onclick="event.stopPropagation(); showUserModal(this, <?php echo $author_id; ?>)"
+                                         data-user-id="<?php echo $author_id; ?>"
+                                         data-avatar="<?php echo esc_attr($author_avatar); ?>"
+                                         data-display-name="<?php echo esc_attr($author_display_name); ?>"
+                                         data-nickname="<?php echo esc_attr($author_nickname); ?>"
+                                         data-description="<?php echo esc_attr($author_description); ?>">
+                                    
+                                    <div class="user-modal" id="modal-<?php echo $author_id; ?>">
+                                        <img src="<?php echo esc_url($author_avatar); ?>" alt="<?php echo esc_attr($author_name); ?>" class="modal-avatar">
+                                        <div class="modal-display-name"><?php echo esc_html($author_display_name); ?></div>
+                                        <div class="modal-nickname">@<?php echo esc_html($author_nickname); ?></div>
+                                        <div class="modal-description"><?php echo esc_html($author_description ? $author_description : ''); ?></div>
+                                        <button type="button" class="modal-button" onclick="goToAuthorPage(event, '<?php echo esc_url($author_url); ?>')">프로필 보기</button>
+                                    </div>
+                                </div>
+                                
+                                <!-- 제목과 카테고리 -->
+                                <div class="title-content">
+                                    <a href="<?php echo esc_url($permalink); ?>" class="post-title"><?php echo esc_html($title); ?></a>
+                                    <?php if ($category_name): ?>
+                                        <span class="post-category"><?php echo esc_html($category_name); ?></span>
+                                    <?php else: ?>
+                                        <span class="post-category">미분류</span>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                            
+                            <div class="post-col col-comments">
+                                <?php echo render_comment_count_block(['postId' => $post_id]); ?>
+                            </div>
+                            
+                            <div class="post-col col-likes">
+                                <?php echo render_like_count_block(['postId' => $post_id]); ?>
+                            </div>
+                            
+                            <div class="post-col col-views">
+                                <?php echo render_view_count_block(['postId' => $post_id]); ?>
+                            </div>
+                            
+                            <div class="post-col col-date">
+                                <span class="post-date"><?php echo esc_html($time_diff); ?> 전</span>
+                            </div>
+                        </div>
+
+                        <?php
+                    }
+                    wp_reset_postdata();
+                }
+                ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- 모바일 모달 오버레이 -->
+    <div class="modal-overlay" id="modal-overlay"></div>
+
+    <!-- 로딩 스피너, 기본적으로 숨김 -->
+    <div id="loading-indicator">
+        <div class="loading-spinner"></div>
+    </div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            let postList = document.getElementById("custom-post-list");
+            let postListBody = document.getElementById("post-list-body");
+            let loadingIndicator = document.getElementById("loading-indicator");
+            let page = 2; // 첫 번째 페이지는 이미 로드됨
+            let postsPerPage = parseInt(postList.getAttribute("data-posts-per-page"));
+            let category = postList.getAttribute("data-category");
+            let totalPosts = <?php echo $total_posts; ?>; // 전체 게시글 개수
+            let loadedPosts = postListBody.children.length; // 현재 로드된 게시글 개수
+            let loading = false;
+            let currentModal = null;
+
+            // 모바일 레이아웃 설정 함수
+            function setupMobileLayout() {
+                if (window.innerWidth <= 768) {
+                    // 모바일: 카테고리와 작성일을 제목 아래에 배치하고, 클릭 영역 확장
+                    const postRows = document.querySelectorAll('.post-row');
+                    
+                    postRows.forEach(row => {
+                        const titleCol = row.querySelector('.col-title');
+                        const titleContent = row.querySelector('.title-content');
+                        const commentsCol = row.querySelector('.col-comments');
+                        const dateCol = row.querySelector('.col-date');
+                        const postTitle = row.querySelector('.post-title');
+                        
+                        // 이미 모바일 레이아웃이 적용되어 있으면 건너뛰기
+                        if (titleCol.querySelector('.mobile-clickable-area')) {
+                            return;
+                        }
+                        
+                        // 원본 구조 정보 저장
+                        if (!row.dataset.originalStructure) {
+                            const columns = Array.from(row.children);
+                            row.dataset.originalStructure = JSON.stringify({
+                                titleIndex: columns.indexOf(titleCol),
+                                commentsIndex: columns.indexOf(commentsCol)
+                            });
+                        }
+                        
+                        if (titleContent && dateCol && postTitle) {
+                            // 원본 링크 URL 가져오기
+                            const postUrl = postTitle.getAttribute('href');
+                            
+                            // 제목에서 링크 제거
+                            const titleText = postTitle.textContent;
+                            const newTitleSpan = document.createElement('span');
+                            newTitleSpan.className = 'post-title';
+                            newTitleSpan.textContent = titleText;
+                            postTitle.replaceWith(newTitleSpan);
+                            
+                            // 모바일 메타정보 컨테이너 생성 (아직 없는 경우)
+                            if (!titleContent.querySelector('.mobile-meta')) {
+                                const mobileMeta = document.createElement('div');
+                                mobileMeta.className = 'mobile-meta';
+                                
+                                // 카테고리 정보 복사 (링크 제거)
+                                const categoryInfo = titleContent.querySelector('.post-category');
+                                if (categoryInfo) {
+                                    const categoryClone = document.createElement('span');
+                                    categoryClone.className = 'post-category';
+                                    categoryClone.textContent = categoryInfo.textContent;
+                                    mobileMeta.appendChild(categoryClone);
+                                    
+                                    // 점 구분자 추가
+                                    const separator = document.createElement('div');
+                                    separator.className = 'meta-separator';
+                                    mobileMeta.appendChild(separator);
+                                }
+                                
+                                // 작성일 정보 복사
+                                const dateInfo = dateCol.querySelector('.post-date');
+                                if (dateInfo) {
+                                    const dateClone = dateInfo.cloneNode(true);
+                                    mobileMeta.appendChild(dateClone);
+                                }
+                                
+                                // 기존 카테고리 숨기기
+                                if (categoryInfo) {
+                                    categoryInfo.style.display = 'none';
+                                }
+                                
+                                // 제목 컨텐츠에 추가
+                                titleContent.appendChild(mobileMeta);
+                            }
+                            
+                            // 모바일 클릭 가능 영역 생성
+                            const clickableArea = document.createElement('a');
+                            clickableArea.href = postUrl;
+                            clickableArea.className = 'mobile-clickable-area';
+                            
+                            // 제목 컨텐츠를 클릭 영역으로 이동
+                            titleContent.remove();
+                            clickableArea.appendChild(titleContent);
+                            
+                            // 댓글 컬럼도 클릭 영역에 포함
+                            if (commentsCol) {
+                                commentsCol.remove();
+                                clickableArea.appendChild(commentsCol);
+                            }
+                            
+                            // 클릭 영역을 제목 컬럼에 추가
+                            titleCol.appendChild(clickableArea);
+                        }
+                    });
+                } else {
+                    // 데스크탑: 원래 구조로 완전 복원
+                    const postRows = document.querySelectorAll('.post-row');
+                    
+                    postRows.forEach(row => {
+                        const titleCol = row.querySelector('.col-title');
+                        const clickableArea = titleCol.querySelector('.mobile-clickable-area');
+                        
+                        if (clickableArea && row.dataset.originalStructure) {
+                            const originalStructure = JSON.parse(row.dataset.originalStructure);
+                            const titleContent = clickableArea.querySelector('.title-content');
+                            const commentsCol = clickableArea.querySelector('.col-comments');
+                            const postUrl = clickableArea.getAttribute('href');
+                            
+                            // 모바일 메타 제거
+                            const mobileMeta = titleContent.querySelector('.mobile-meta');
+                            if (mobileMeta) {
+                                mobileMeta.remove();
+                            }
+                            
+                            // 카테고리 다시 표시
+                            const categories = titleContent.querySelectorAll('.post-category');
+                            categories.forEach(cat => {
+                                cat.style.display = '';
+                            });
+                            
+                            // 제목을 span에서 다시 링크로 변경
+                            const titleSpan = titleContent.querySelector('.post-title');
+                            if (titleSpan && titleSpan.tagName === 'SPAN') {
+                                const newTitle = document.createElement('a');
+                                newTitle.href = postUrl;
+                                newTitle.className = 'post-title';
+                                newTitle.textContent = titleSpan.textContent;
+                                titleSpan.replaceWith(newTitle);
+                            }
+                            
+                            // 클릭 영역 제거하고 원래 구조로 복원
+                            clickableArea.remove();
+                            titleCol.appendChild(titleContent);
+                            
+                            // 댓글 컬럼을 정확한 원래 위치에 복원
+                            if (commentsCol) {
+                                const allColumns = Array.from(row.children);
+                                const targetIndex = originalStructure.commentsIndex;
+                                
+                                if (targetIndex < allColumns.length) {
+                                    row.insertBefore(commentsCol, allColumns[targetIndex]);
+                                } else {
+                                    row.appendChild(commentsCol);
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
+            // 초기 모바일 레이아웃 설정
+            setupMobileLayout();
+
+            // 화면 크기 변경 시 레이아웃 재설정
+            window.addEventListener('resize', function() {
+                setTimeout(setupMobileLayout, 100);
+            });
+
+            // 사용자 모달 표시 함수
+            window.showUserModal = function(avatarElement, userId) {
+                // 기존 모달 숨기기
+                hideAllModals();
+                
+                let modal = document.getElementById('modal-' + userId);
+                let overlay = document.getElementById('modal-overlay');
+                if (!modal) return;
+                
+                let isMobile = window.innerWidth <= 768;
+                
+                if (isMobile) {
+                    // 모바일: 하단 고정 + 오버레이
+                    overlay.classList.add('show');
+                    modal.style.position = 'fixed';
+                    modal.style.bottom = '0';
+                    modal.style.left = '0';
+                    modal.style.right = '0';
+                    modal.style.top = 'auto';
+                    modal.style.transform = 'none';
+                } else {
+                    // PC: 아바타 중앙 기준으로 위/아래 배치
+                    let avatarRect = avatarElement.getBoundingClientRect();
+                    let viewportHeight = window.innerHeight;
+                    let modalWidth = 200; // 모달 너비
+                    let modalHeight = 150; // 예상 모달 높이
+                    let gap = 10; // 아바타와 모달 사이 간격
+                    
+                    // 아바타 중앙 X 좌표 계산
+                    let avatarCenterX = avatarRect.left + (avatarRect.width / 2);
+                    
+                    // 모달 X 위치 (화면 밖으로 나가지 않도록 조정)
+                    let modalLeft = avatarCenterX - (modalWidth / 2);
+                    if (modalLeft < 10) modalLeft = 10;
+                    if (modalLeft + modalWidth > window.innerWidth - 10) {
+                        modalLeft = window.innerWidth - modalWidth - 10;
+                    }
+                    
+                    // 화면 상단 절반에 있으면 아래에, 하단 절반에 있으면 위에 표시
+                    let showAbove = (avatarRect.top > viewportHeight / 2);
+                    
+                    modal.style.position = 'fixed';
+                    modal.style.left = modalLeft + 'px';
+                    modal.style.transform = 'none';
+                    
+                    if (showAbove) {
+                        // 아바타 위쪽에 표시
+                        modal.style.bottom = (viewportHeight - avatarRect.top + gap) + 'px';
+                        modal.style.top = 'auto';
+                    } else {
+                        // 아바타 아래쪽에 표시
+                        modal.style.top = (avatarRect.bottom + gap) + 'px';
+                        modal.style.bottom = 'auto';
+                    }
+                }
+                
+                modal.classList.add('show');
+                currentModal = modal;
+            };
+
+            // 작성자 페이지로 이동하는 함수
+            window.goToAuthorPage = function(event, authorUrl) {
+                event.preventDefault();
+                event.stopPropagation();
+                
+                console.log('이동할 URL:', authorUrl); // 디버깅용
+                
+                if (!authorUrl || authorUrl === '') {
+                    console.error('Author URL이 비어있습니다.');
+                    return;
+                }
+                
+                hideAllModals();
+                window.location.href = authorUrl;
+            };
+
+            // 모든 모달 숨기기
+            function hideAllModals() {
+                let modals = document.querySelectorAll('.user-modal');
+                let overlay = document.getElementById('modal-overlay');
+                
+                modals.forEach(modal => {
+                    modal.classList.remove('show');
+                });
+                overlay.classList.remove('show');
+                currentModal = null;
+            }
+
+            // 문서 클릭 이벤트로 모달 숨기기
+            document.addEventListener('click', function(e) {
+                if (currentModal && !currentModal.contains(e.target) && !e.target.classList.contains('author-avatar')) {
+                    hideAllModals();
+                }
+            });
+
+            // 오버레이 클릭으로 모달 숨기기 (모바일)
+            document.getElementById('modal-overlay').addEventListener('click', function() {
+                hideAllModals();
+            });
+
+            // 스크롤 시 모달 숨기기
+            window.addEventListener('scroll', function() {
+                if (currentModal) {
+                    hideAllModals();
+                }
+            });
+
+            function loadMorePosts() {
+                if (loading || loadedPosts >= totalPosts) return; // 이미 모든 글이 로드됨
+
+                loading = true;
+                loadingIndicator.style.display = "block";
+
+                let xhr = new XMLHttpRequest();
+                xhr.open("POST", "<?php echo admin_url('admin-ajax.php'); ?>", true);
+                xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+
+                xhr.onload = function () {
+                    if (xhr.status >= 200 && xhr.status < 400) {
+                        let response = xhr.responseText.trim();
+                        if (response === "") {
+                            // 더 이상 불러올 글이 없음 -> 로딩 메시지 숨김
+                            loadingIndicator.style.display = "none";
+                        } else {
+                            postListBody.insertAdjacentHTML("beforeend", response);
+                            loadedPosts = postListBody.children.length; // 업데이트된 로드된 글 개수
+                            page++;
+                            
+                            // 새로 로드된 포스트에 모바일 레이아웃 적용
+                            setupMobileLayout();
+                        }
+                    }
+                    loading = false;
+
+                    // 더 이상 불러올 글이 없다면 로딩 메시지 숨김
+                    if (loadedPosts >= totalPosts) {
+                        loadingIndicator.style.display = "none";
+                    }
+                };
+
+                xhr.send("action=load_more_posts_v2&page=" + page + "&posts_per_page=" + postsPerPage + "&category=" + encodeURIComponent(category));
+            }
+
+            // 스크롤 이벤트 감지
+            window.addEventListener("scroll", function () {
+                let scrollTop = window.scrollY || document.documentElement.scrollTop;
+                let windowHeight = window.innerHeight;
+                let documentHeight = document.documentElement.scrollHeight;
+
+                if (scrollTop + windowHeight >= documentHeight - 100) {
+                    loadMorePosts();
+                }
+            });
+        });
+    </script>
+    <?php
+
+    return ob_get_clean();
+}
+add_shortcode('custom_post_list_v2', 'custom_post_list_v2_shortcode');
+
+function load_more_posts_v2() {
+    $page = isset($_POST['page']) ? intval($_POST['page']) : 1;
+    $posts_per_page = isset($_POST['posts_per_page']) ? intval($_POST['posts_per_page']) : 6;
+    $category = isset($_POST['category']) ? sanitize_text_field($_POST['category']) : '';
+
+    $query_args = [
+        'post_type'      => 'post',
+        'posts_per_page' => $posts_per_page,
+        'post_status'    => 'publish',
+        'paged'          => $page,
+    ];
+
+    // 카테고리 파라미터 처리
+    if (!empty($category)) {
+        // 쉼표로 구분된 여러 카테고리 처리
+        $categories = array_map('trim', explode(',', $category));
+        
+        // 숫자인지 문자인지 확인하여 적절한 필드 사용
+        if (is_numeric($categories[0])) {
+            // ID로 카테고리 지정
+            $query_args['cat'] = implode(',', $categories);
+        } else {
+            // 슬러그로 카테고리 지정
+            $query_args['category_name'] = implode(',', $categories);
+        }
+    }
+
+    $query = new WP_Query($query_args);
+
+    if ($query->have_posts()) {
+        while ($query->have_posts()) {
+            $query->the_post();
+            $post_id = get_the_ID();
+            $title = get_the_title();
+            $author_id = get_the_author_meta('ID');
+            $author_name = get_the_author();
+            $author_display_name = get_the_author_meta('display_name', $author_id);
+            $author_nickname = get_the_author_meta('nickname', $author_id);
+            $author_description = get_the_author_meta('description', $author_id);
+            $author_url = home_url('/@' . $author_nickname);
+            
+            // 카테고리 정보 가져오기
+            $categories = get_the_category($post_id);
+            $category_name = '';
+            $category_url = '';
+            if (!empty($categories)) {
+                $main_category = $categories[0]; // 첫 번째 카테고리 사용
+                $category_name = $main_category->name;
+                $category_url = get_category_link($main_category->term_id);
+            }
+            
+            // 커스텀 아바타 시스템 사용
+            $custom_avatar = get_user_meta($author_id, 'custom_avatar', true);
+            if ($custom_avatar) {
+                $author_avatar = $custom_avatar;
+            } else {
+                // 커스텀 아바타가 없으면 기본 아바타 사용
+                $avatar_html = get_avatar($author_id, 64);
+                preg_match('/src="([^"]+)"/', $avatar_html, $avatar_matches);
+                $author_avatar = !empty($avatar_matches[1]) ? $avatar_matches[1] : 'data:image/svg+xml;base64,' . base64_encode('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><circle fill="#ddd" cx="32" cy="32" r="32"/><circle fill="#999" cx="32" cy="24" r="8"/><ellipse fill="#999" cx="32" cy="50" rx="12" ry="8"/></svg>');
+            }
+            
+            $time_diff = human_time_diff(get_the_time('U'), current_time('timestamp'));
+            $permalink = get_permalink();
+            ?>
+
+            <div class="post-row">
+                <div class="post-col col-title">
+                    <!-- 아바타 -->
+                    <div class="author-avatar-container">
+                        <img src="<?php echo esc_url($author_avatar); ?>" 
+                             alt="<?php echo esc_attr($author_name); ?>" 
+                             class="author-avatar"
+                             onclick="event.stopPropagation(); showUserModal(this, <?php echo $author_id; ?>)"
+                             data-user-id="<?php echo $author_id; ?>"
+                             data-avatar="<?php echo esc_attr($author_avatar); ?>"
+                             data-display-name="<?php echo esc_attr($author_display_name); ?>"
+                             data-nickname="<?php echo esc_attr($author_nickname); ?>"
+                             data-description="<?php echo esc_attr($author_description); ?>">
+                        
+                        <div class="user-modal" id="modal-<?php echo $author_id; ?>">
+                            <img src="<?php echo esc_url($author_avatar); ?>" alt="<?php echo esc_attr($author_name); ?>" class="modal-avatar">
+                            <div class="modal-display-name"><?php echo esc_html($author_display_name); ?></div>
+                            <div class="modal-nickname">@<?php echo esc_html($author_nickname); ?></div>
+                            <div class="modal-description"><?php echo esc_html($author_description ? $author_description : ''); ?></div>
+                            <button type="button" class="modal-button" onclick="goToAuthorPage(event, '<?php echo esc_url($author_url); ?>')">프로필 보기</button>
+                        </div>
+                    </div>
+                    
+                    <!-- 제목과 카테고리 -->
+                    <div class="title-content">
+                        <a href="<?php echo esc_url($permalink); ?>" class="post-title"><?php echo esc_html($title); ?></a>
+                        <?php if ($category_name): ?>
+                            <span class="post-category"><?php echo esc_html($category_name); ?></span>
+                        <?php else: ?>
+                            <span class="post-category">미분류</span>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                
+                <div class="post-col col-comments">
+                    <?php echo render_comment_count_block(['postId' => $post_id]); ?>
+                </div>
+                
+                <div class="post-col col-likes">
+                    <?php echo render_like_count_block(['postId' => $post_id]); ?>
+                </div>
+                
+                <div class="post-col col-views">
+                    <?php echo render_view_count_block(['postId' => $post_id]); ?>
+                </div>
+                
+                <div class="post-col col-date">
+                    <span class="post-date"><?php echo esc_html($time_diff); ?> 전</span>
+                </div>
+            </div>
+
+            <?php
+        }
+        wp_reset_postdata();
+    }
+    wp_die();
+}
+add_action('wp_ajax_load_more_posts_v2', 'load_more_posts_v2');
+add_action('wp_ajax_nopriv_load_more_posts_v2', 'load_more_posts_v2');
