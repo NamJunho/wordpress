@@ -1,0 +1,590 @@
+// ==========================
+// Medium-Style Frontend Post (간소화 + placeholder 보완: 제목/본문)
+// ==========================
+
+function sfp_enqueue_styles_and_scripts() {
+    if (is_page() && has_shortcode(get_post()->post_content ?? '', 'sfp_frontend_post_form')) {
+        wp_enqueue_style('sfp-styles', get_template_directory_uri() . '/style.css');
+        wp_enqueue_script('jquery');
+        // 모달 사용을 위해 Bootstrap 유지(원치 않으면 모달/링크 UI를 커스텀하세요)
+        wp_enqueue_style('bootstrap-css', 'https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css', [], null);
+        wp_enqueue_script('popper-js', 'https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js', ['jquery'], null, true);
+        wp_enqueue_script('bootstrap-js', 'https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js', ['jquery','popper-js'], null, true);
+    }
+}
+add_action('wp_enqueue_scripts', 'sfp_enqueue_styles_and_scripts');
+
+function sfp_frontend_post_form() {
+    if (!is_user_logged_in()) {
+        return '<div class="sfp-login-message">로그인한 사용자만 글을 제출할 수 있습니다.</div>';
+    }
+
+    // 수정 모드
+    $is_edit = false;
+    $edit_post = null;
+    $edit_id = isset($_GET['edit']) ? absint($_GET['edit']) : 0;
+    if ($edit_id) {
+        $candidate = get_post($edit_id);
+        if ($candidate && current_user_can('edit_post', $candidate->ID)) {
+            $is_edit = true;
+            $edit_post = $candidate;
+        } else {
+            return '<div class="alert alert-danger">해당 글을 수정할 권한이 없습니다.</div>';
+        }
+    }
+
+    // 초기값
+    $initial_title   = $is_edit ? $edit_post->post_title : '';
+    $initial_content = $is_edit ? $edit_post->post_content : '';
+    $selected_cat_id = 0;
+    if ($is_edit) {
+        $cats = wp_get_post_categories($edit_post->ID);
+        if (!empty($cats)) $selected_cat_id = (int)$cats[0];
+    }
+
+    ob_start();
+    ?>
+    <div class="sfp-medium-shell">
+        <form id="frontend-post-form" class="sfp-form" method="post" enctype="multipart/form-data" autocomplete="off">
+            <?php wp_nonce_field('sfp_frontend_post_nonce', 'sfp_nonce'); ?>
+            <?php if ($is_edit): ?>
+                <input type="hidden" name="edit_post_id" value="<?php echo esc_attr($edit_post->ID); ?>">
+            <?php endif; ?>
+
+            <!-- 상단 바 -->
+            <div class="sfp-topbar">
+                <div class="sfp-topbar-left">
+                    <select name="post_category" id="post_category" class="sfp-topbar-select" required>
+                        <option value="" disabled <?php echo $is_edit ? '' : 'selected'; ?>>카테고리 선택</option>
+                        <?php
+                        $categories = get_categories(['hide_empty' => false]);
+                        foreach ($categories as $category) {
+                            $sel = ($is_edit && (int)$category->term_id === $selected_cat_id) ? ' selected' : '';
+                            echo '<option value="' . esc_attr($category->term_id) . '"' . $sel . '>' . esc_html($category->name) . '</option>';
+                        }
+                        ?>
+                    </select>
+                </div>
+                <div class="sfp-topbar-right">
+                    <input type="submit" name="submit_post" value="<?php echo $is_edit ? '업데이트' : '발행'; ?>" class="sfp-btn primary">
+                </div>
+            </div>
+
+            <!-- 본문 영역 -->
+            <div class="sfp-editor-container" aria-label="미디엄 스타일 에디터">
+                <!-- 제목 -->
+                <div class="sfp-title" id="sfp-title" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="제목"></div>
+
+                <!-- 본문 -->
+                <div class="sfp-editor" id="editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="여기에 글을 쓰세요."></div>
+            </div>
+
+            <!-- 숨김 필드 -->
+            <input type="hidden" name="post_title" id="post_title_hidden">
+            <input type="hidden" name="post_content" id="post_content_hidden">
+        </form>
+    </div>
+
+    <!-- 선택 툴바 (되돌리기/다시하기/구분선/슬래시 커맨드 없음) -->
+    <div id="sfp-toolbar" class="sfp-toolbar" style="display:none;">
+        <button data-cmd="bold" title="굵게" aria-label="굵게"><b>B</b></button>
+        <button data-cmd="italic" title="기울임" aria-label="기울임"><i>I</i></button>
+        <button data-cmd="underline" title="밑줄" aria-label="밑줄"><u>U</u></button>
+        <span class="sep"></span>
+        <button data-cmd="link" title="링크" aria-label="링크">🔗</button>
+        <button data-cmd="inlineCode" title="인라인 코드" aria-label="인라인 코드">{"</button>
+        <span class="sep"></span>
+        <button data-cmd="h2" title="소제목" aria-label="소제목">H2</button>
+        <button data-cmd="quote" title="인용" aria-label="인용">❝</button>
+        <button data-cmd="ul" title="불릿 목록" aria-label="불릿 목록">•</button>
+        <button data-cmd="ol" title="번호 목록" aria-label="번호 목록">1.</button>
+        <button data-cmd="codeBlock" title="코드 블록" aria-label="코드 블록">{ }</button>
+    </div>
+
+    <!-- 링크 모달 -->
+    <div class="modal fade" id="sfpLinkModal" tabindex="-1" role="dialog" aria-labelledby="sfpLinkModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="sfpLinkModalLabel">링크 삽입</h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="닫기">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="modal-body">
+            <label for="sfp-link-url">URL (https://…)</label>
+            <input type="url" class="form-control" id="sfp-link-url" placeholder="https://example.com" />
+            <small class="form-text text-muted">새 탭으로 열리며 nofollow가 적용됩니다. 비우면 링크가 제거됩니다.</small>
+          </div>
+          <div class="modal-footer">
+            <button type="button" id="sfp-remove-link" class="btn btn-danger">링크 제거</button>
+            <button type="button" id="sfp-insert-link" class="btn btn-primary">삽입</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <style>
+      /* ===== 미디엄 레이아웃/타이포 ===== */
+      .sfp-medium-shell{--col:720px;--g:24px;--ink:#111;--muted:#6b7280;--ui:#e5e7eb;--brand:#111;--soft:#f5f5f5;}
+      .sfp-topbar{position:sticky;top:0;z-index:10;display:flex;justify-content:space-between;align-items:center;padding:12px 20px;background:#fff;border-bottom:1px solid var(--ui);}
+      .sfp-topbar-select{border:1px solid var(--ui);border-radius:999px;padding:8px 14px;outline:none;background:#fff;}
+      .sfp-btn{border:none;border-radius:999px;padding:9px 16px;font-weight:600;cursor:pointer}
+      .sfp-btn.primary{background:var(--brand);color:#fff}
+      .sfp-editor-container{max-width:var(--col);margin:48px auto;padding:0 20px}
+      .sfp-title{font-size:44px;line-height:1.15;font-weight:800;margin:0 0 8px 0;color:var(--ink)}
+      [contenteditable][data-placeholder]:empty:before{content:attr(data-placeholder);color:var(--muted)}
+      /* 강제 표시용(입력 후 전부 지웠을 때도 표시) */
+      [contenteditable][data-placeholder].is-empty:before{content:attr(data-placeholder);color:var(--muted)}
+      .sfp-editor{font-size:20px;line-height:1.9;color:var(--ink);min-height:280px}
+      .sfp-editor p{margin:0 0 1em 0}
+      .sfp-editor h2{font-size:28px;line-height:1.35;font-weight:800;margin:1.2em 0 .6em}
+      .sfp-editor blockquote{border-left:3px solid #ddd;color:#555;margin:1.2em 0;padding:.2em 1em;background:transparent}
+      .sfp-editor ul,.sfp-editor ol{margin:0 0 1em 1.4em}
+      .sfp-editor pre{background:var(--soft);padding:14px;border-radius:8px;overflow:auto;font-size:.95em;line-height:1.6}
+      .sfp-editor code{background:var(--soft);padding:2px 6px;border-radius:4px}
+      figure.sfp-image{margin:20px 0;text-align:center}
+      figure.sfp-image img{max-width:100%;height:auto;border-radius:6px}
+      figure.sfp-image figcaption{color:#666;font-size:.9em;margin-top:6px}
+      /* 선택 툴바 */
+      .sfp-toolbar{position:fixed;z-index:9999;background:#202428;color:#fff;border-radius:10px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+      .sfp-toolbar button{min-width:34px;min-height:34px;border:none;background:transparent;color:#fff;border-radius:8px;margin:0 2px}
+      .sfp-toolbar button:hover,.sfp-toolbar button.active{background:#111}
+      .sfp-toolbar .sep{display:inline-block;width:1px;height:24px;background:#333;margin:0 6px;vertical-align:middle}
+      @media (max-width: 768px){
+        .sfp-title{font-size:34px}
+        .sfp-editor{font-size:18px}
+      }
+    </style>
+
+    <script>
+    jQuery(function($){
+        const $title   = $('#sfp-title');
+        const $editor  = $('#editor');
+        const $toolbar = $('#sfp-toolbar');
+        const isEdit   = <?php echo $is_edit ? 'true' : 'false'; ?>;
+
+        // 서버 초기값 채우기
+        <?php if ($is_edit): ?>
+            $title.html(<?php echo json_encode($initial_title); ?>);
+            $editor.html(<?php echo json_encode($initial_content); ?>);
+        <?php else: ?>
+            $title.text('');
+            $editor.text('');
+        <?php endif; ?>
+
+        // ===== placeholder 복구 로직(제목/본문 공통) =====
+        function isContentReallyEmpty($el){
+            // 텍스트에서 공백/개행/ZWSP/nbsp 제거 후 비어있는지 확인
+            const t = $el.text().replace(/\u200B|\u00A0|\s/g,'');
+            if(t !== '') return false;
+            // 내용이 <br>만 있거나 의미없는 빈 노드만 있는 경우도 비어있다고 간주
+            const html = $el.html().trim().replace(/<br\s*\/?>/gi,'').replace(/&nbsp;/gi,'').replace(/\u200B/g,'').replace(/\s+/g,'');
+            return html === '' || html === '<p></p>' || html === '<p></p><p></p>';
+        }
+        function refreshPlaceholders(){
+            $title.toggleClass('is-empty', isContentReallyEmpty($title));
+            $editor.toggleClass('is-empty', isContentReallyEmpty($editor));
+        }
+        // 입력/지움/붙여넣기 등 모든 변화에 반응
+        $title.on('input blur keyup paste', refreshPlaceholders);
+        $editor.on('input blur keyup paste', refreshPlaceholders);
+        // 초기 1회 실행
+        refreshPlaceholders();
+
+        // 페이지 이탈 경고(원치 않으면 이 블록 제거)
+        let dirty=false, submitting=false;
+        const markDirty=()=>{ dirty=true; };
+        $title.add($editor).on('input paste', markDirty);
+        window.addEventListener('beforeunload', (e)=>{
+            if(dirty && !submitting){ e.preventDefault(); e.returnValue=''; }
+        });
+
+        // ===== 선택 툴바 =====
+        const isSelectionInside = el => {
+            const sel = window.getSelection();
+            if(!sel || sel.rangeCount===0) return false;
+            return el.get(0).contains(sel.getRangeAt(0).commonAncestorContainer);
+        };
+        function showToolbar(){
+            const sel = window.getSelection();
+            if(!sel || sel.rangeCount===0) return $toolbar.hide();
+            if(sel.isCollapsed || !isSelectionInside($editor)) return $toolbar.hide();
+            const range = sel.getRangeAt(0);
+            const rect = range.getBoundingClientRect();
+            const tbW = $toolbar.outerWidth();
+            const tbH = $toolbar.outerHeight();
+            let top = rect.bottom + 8;
+            let left = rect.left + (rect.width/2) - (tbW/2);
+            const vwW = window.innerWidth, vwH=window.innerHeight;
+            if(top+tbH>vwH-8) top = rect.top - tbH - 8;
+            left = Math.max(8, Math.min(left, vwW - tbW - 8));
+            $toolbar.css({top: top+'px', left: left+'px'}).show();
+            updateToolbarState();
+        }
+        function updateToolbarState(){
+            const btn = (cmd, on)=> $toolbar.find(`[data-cmd="${cmd}"]`).toggleClass('active', !!on).attr('aria-pressed', !!on);
+            const sel = window.getSelection(); if(!sel || sel.rangeCount===0) return;
+            const node = sel.getRangeAt(0).startContainer;
+            const $n = $(node.nodeType===3?node.parentNode:node);
+            btn('bold', $n.closest('b,strong').length>0);
+            btn('italic', $n.closest('i,em').length>0);
+            btn('underline', $n.closest('u').length>0);
+            btn('inlineCode', $n.closest('code').length>0 && !$n.closest('pre').length);
+            btn('h2', $n.closest('h2').length>0);
+            btn('quote', $n.closest('blockquote').length>0);
+            btn('ul', $n.closest('ul').length>0);
+            btn('ol', $n.closest('ol').length>0);
+            btn('codeBlock', $n.closest('pre').length>0);
+        }
+        document.addEventListener('selectionchange', ()=> { setTimeout(()=> showToolbar(), 100); });
+        $(window).on('scroll resize', ()=> $toolbar.hide());
+        $(document).on('mousedown touchstart', (e)=>{
+            if(!$toolbar.get(0).contains(e.target) && !$editor.get(0).contains(e.target)) $toolbar.hide();
+        });
+
+        function wrapInline(tag){
+            const sel = window.getSelection();
+            if(!sel || sel.rangeCount===0) return;
+            const range = sel.getRangeAt(0);
+            if(range.collapsed){ document.execCommand('insertText', false, tag==='code'?'code':'텍스트'); }
+            else { document.execCommand('insertHTML', false, `<${tag}>${range.toString()}</${tag}>`); }
+        }
+        function unwrapClosest(tag){
+            const sel = window.getSelection();
+            if(!sel || sel.rangeCount===0) return;
+            let el = $(sel.getRangeAt(0).startContainer).closest(tag)[0];
+            if(!el) return;
+            while(el.firstChild) el.parentNode.insertBefore(el.firstChild, el);
+            el.remove();
+        }
+        function toggleBlock(tag){
+            const sel = window.getSelection(); if(!sel || sel.rangeCount===0) return;
+            let el = $(sel.getRangeAt(0).startContainer).closest(tag)[0];
+            if(el){ // 해제
+                const p = document.createElement('p');
+                p.innerHTML = el.innerHTML;
+                el.parentNode.replaceChild(p, el);
+            } else {
+                document.execCommand('formatBlock', false, tag);
+            }
+        }
+        function toggleCodeBlock(){
+            const sel = window.getSelection(); if(!sel || sel.rangeCount===0) return;
+            let pre = $(sel.getRangeAt(0).startContainer).closest('pre')[0];
+            if(pre){
+                const p = document.createElement('p'); p.textContent = pre.textContent;
+                pre.parentNode.replaceChild(p, pre);
+            } else {
+                document.execCommand('insertHTML', false, '<pre><code>// 코드 입력</code></pre>');
+            }
+        }
+        $toolbar.on('click', 'button', function(e){
+            e.preventDefault();
+            const cmd = this.getAttribute('data-cmd');
+            if(cmd==='bold' || cmd==='italic' || cmd==='underline'){ document.execCommand(cmd,false,null); }
+            else if(cmd==='link'){ openLinkModal(); }
+            else if(cmd==='inlineCode'){
+                const inCode = $(window.getSelection().anchorNode).closest('code').length>0 && !$(window.getSelection().anchorNode).closest('pre').length;
+                if(inCode) unwrapClosest('code'); else wrapInline('code');
+            }
+            else if(cmd==='h2'){ toggleBlock('h2'); }
+            else if(cmd==='quote'){ toggleBlock('blockquote'); }
+            else if(cmd==='ul'){ document.execCommand('insertUnorderedList'); }
+            else if(cmd==='ol'){ document.execCommand('insertOrderedList'); }
+            else if(cmd==='codeBlock'){ toggleCodeBlock(); }
+            updateToolbarState();
+            dirty = true;
+            refreshPlaceholders(); // 포맷팅으로 비게 될 경우 대비
+        });
+
+        // ----- 링크 모달 -----
+        let savedRange=null;
+        function saveSelection(){
+            const sel = window.getSelection(); if(sel && sel.rangeCount>0){ savedRange = sel.getRangeAt(0).cloneRange(); }
+        }
+        function restoreSelection(){
+            if(!savedRange) return false;
+            const sel = window.getSelection();
+            sel.removeAllRanges(); sel.addRange(savedRange);
+            return true;
+        }
+        function openLinkModal(){
+            saveSelection();
+            const linkEl = $(window.getSelection().anchorNode).closest('a')[0];
+            $('#sfp-link-url').val(linkEl ? (linkEl.getAttribute('href')||'') : 'https://');
+            $('#sfpLinkModal').modal('show');
+            setTimeout(()=> $('#sfp-link-url').trigger('focus'), 200);
+        }
+        $('#sfp-insert-link').on('click', function(){
+            $('#sfpLinkModal').modal('hide');
+            setTimeout(()=>{
+                if(!restoreSelection()) return;
+                const url = ($('#sfp-link-url').val()||'').trim();
+                if(url && !/^https?:\/\//i.test(url)){ alert('https:// 를 포함한 올바른 URL을 입력하세요.'); return; }
+                const existing = $(window.getSelection().anchorNode).closest('a')[0];
+                if(existing){
+                    if(url){ existing.href=url; existing.target='_blank'; existing.rel='nofollow noopener'; }
+                    else {
+                        const parent = existing.parentNode; while(existing.firstChild){ parent.insertBefore(existing.firstChild, existing); } parent.removeChild(existing);
+                    }
+                }else if(url){
+                    document.execCommand('createLink', false, url);
+                    const a = $(window.getSelection().anchorNode).closest('a')[0];
+                    if(a){ a.target='_blank'; a.rel='nofollow noopener'; }
+                }
+                dirty = true;
+            },150);
+        });
+        $('#sfp-remove-link').on('click', function(){
+            $('#sfpLinkModal').modal('hide');
+            setTimeout(()=>{
+                if(!restoreSelection()) return;
+                document.execCommand('unlink', false, null);
+                dirty = true;
+            },150);
+        });
+
+        // ----- 이미지 업로드(버튼/드롭/붙여넣기) + 캡션 -----
+        let $file = $('#post_image');
+        if(!$file.length){
+            $file = $('<input type="file" id="post_image" class="d-none" accept="image/*" multiple>');
+            document.body.appendChild($file.get(0));
+        }
+        $file.on('change', function(){ if(this.files.length) uploadImages(this.files); });
+
+        function makeImageFigure(url){
+            const fig = document.createElement('figure'); fig.className='sfp-image';
+            const img = document.createElement('img'); img.src=url;
+            const cap = document.createElement('figcaption'); cap.contentEditable='true'; cap.setAttribute('data-placeholder','캡션 추가(선택)');
+            fig.appendChild(img); fig.appendChild(cap);
+            return fig;
+        }
+        // 드래그앤드롭
+        $editor.on('dragover', function(e){ e.preventDefault(); e.originalEvent.dataTransfer.dropEffect='copy'; });
+        $editor.on('drop', function(e){
+            e.preventDefault();
+            const files = e.originalEvent.dataTransfer.files;
+            if(files && files.length) uploadImages(files);
+        });
+        // 붙여넣기(이미지)
+        $editor.on('paste', function(e){
+            const items = (e.originalEvent.clipboardData || {}).items || [];
+            for(const it of items){
+                if(it.type && it.type.indexOf('image')===0){
+                    const file = it.getAsFile(); if(file){ uploadImages([file]); }
+                }
+            }
+        });
+        function uploadImages(fileList){
+            const formData = new FormData();
+            formData.append('action', 'sfp_upload_image');
+            formData.append('nonce', '<?php echo wp_create_nonce("sfp_upload_nonce"); ?>');
+            for(let i=0;i<fileList.length;i++){ formData.append('images[]', fileList[i]); }
+
+            const loader = document.createElement('p'); loader.textContent='이미지 업로드 중…';
+            const sel = window.getSelection();
+            if(sel && sel.rangeCount>0) sel.getRangeAt(0).insertNode(loader);
+            else $editor.get(0).appendChild(loader);
+
+            $.ajax({
+                url: '<?php echo admin_url("admin-ajax.php"); ?>',
+                type: 'POST',
+                data: formData,
+                contentType: false,
+                processData: false
+            }).done(function(res){
+                loader.remove();
+                if(res && res.success && Array.isArray(res.data)){
+                    insertImages(res.data);
+                } else {
+                    alert('이미지 업로드 실패: ' + (res && res.data ? res.data : '알 수 없는 오류'));
+                }
+            }).fail(function(){
+                loader.remove();
+                alert('이미지 업로드 중 오류가 발생했습니다.');
+            });
+        }
+        function insertImages(urls){
+            const sel = window.getSelection();
+            urls.forEach(url=>{
+                const fig = makeImageFigure(url);
+                if(sel && sel.rangeCount>0 && $editor.get(0).contains(sel.anchorNode)){
+                    const range = sel.getRangeAt(0);
+                    range.collapse(false);
+                    range.insertNode(fig);
+                    range.setStartAfter(fig); range.collapse(true);
+                    sel.removeAllRanges(); sel.addRange(range);
+                } else {
+                    $editor.get(0).appendChild(fig);
+                }
+            });
+            dirty = true;
+            refreshPlaceholders(); // 본문이 비어있다가 이미지 추가/삭제 시 상태 반영
+        }
+
+        // ----- 제출 전 정리 & 값 세팅 -----
+        function cleanHTML(root){
+            const wrap = document.createElement('div'); wrap.innerHTML = root.innerHTML;
+            // 불필요 BR/빈 블록 제거
+            wrap.querySelectorAll('p,h2,blockquote,li').forEach(el=>{
+                while(el.firstChild && el.firstChild.tagName==='BR') el.removeChild(el.firstChild);
+                while(el.lastChild && el.lastChild.tagName==='BR') el.removeChild(el.lastChild);
+                const txt = (el.textContent||'').replace(/\u200B|\s|\n/g,'');
+                if(!txt && !el.querySelector('img') && el.tagName!=='LI'){ el.remove(); }
+            });
+            return wrap.innerHTML.trim();
+        }
+
+        $('#frontend-post-form').on('submit', function(){
+            submitting=true;
+            const title = $title.text().trim();
+            if(!title){
+                alert('제목을 입력해주세요.');
+                submitting=false;
+                return false;
+            }
+            const contentHTML = cleanHTML($editor.get(0));
+            $('#post_title_hidden').val(title);
+            $('#post_content_hidden').val(contentHTML);
+            return true; // 바로 발행/업데이트
+        });
+
+        // placeholder 초기화 재확인(이미지/포맷 삽입 등 후)
+        refreshPlaceholders();
+    });
+    </script>
+    <?php
+    return ob_get_clean();
+}
+add_shortcode('sfp_frontend_post_form', 'sfp_frontend_post_form');
+
+// AJAX 이미지 업로드 처리
+function sfp_handle_ajax_image_upload() {
+    if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'sfp_upload_nonce')) { wp_die('권한이 없습니다.'); }
+    if (!is_user_logged_in()) { wp_send_json_error('로그인이 필요합니다.'); }
+    if (empty($_FILES['images'])) { wp_send_json_error('업로드할 이미지가 없습니다.'); }
+
+    require_once(ABSPATH . 'wp-admin/includes/image.php');
+    require_once(ABSPATH . 'wp-admin/includes/file.php');
+    require_once(ABSPATH . 'wp-admin/includes/media.php');
+
+    $uploaded_images = [];
+    $files = $_FILES['images'];
+
+    for ($i = 0; $i < count($files['name']); $i++) {
+        if ($files['error'][$i] === UPLOAD_ERR_OK) {
+            $file = [
+                'name'     => $files['name'][$i],
+                'type'     => $files['type'][$i],
+                'tmp_name' => $files['tmp_name'][$i],
+                'error'    => $files['error'][$i],
+                'size'     => $files['size'][$i]
+            ];
+            $movefile = wp_handle_upload($file, ['test_form' => false]);
+            if ($movefile && !isset($movefile['error'])) {
+                $attachment = [
+                    'post_mime_type' => $movefile['type'],
+                    'post_title'     => sanitize_file_name($file['name']),
+                    'post_content'   => '',
+                    'post_status'    => 'inherit'
+                ];
+                $attach_id  = wp_insert_attachment($attachment, $movefile['file']);
+                $attach_data = wp_generate_attachment_metadata($attach_id, $movefile['file']);
+                wp_update_attachment_metadata($attach_id, $attach_data);
+                $uploaded_images[] = wp_get_attachment_url($attach_id);
+            }
+        }
+    }
+
+    if (!empty($uploaded_images)) wp_send_json_success($uploaded_images);
+    else wp_send_json_error('이미지 업로드에 실패했습니다.');
+}
+add_action('wp_ajax_sfp_upload_image', 'sfp_handle_ajax_image_upload');
+add_action('wp_ajax_nopriv_sfp_upload_image', 'sfp_handle_ajax_image_upload');
+
+// 글 제출/수정 처리 (바로 발행/업데이트)
+function sfp_handle_post_submission() {
+    if (isset($_POST['submit_post']) && is_user_logged_in()) {
+        if (!isset($_POST['sfp_nonce']) || !wp_verify_nonce($_POST['sfp_nonce'], 'sfp_frontend_post_nonce')) {
+            wp_die('권한이 없습니다.');
+        }
+
+        $post_title    = sanitize_text_field($_POST['post_title'] ?? '');
+        $post_content  = wp_kses_post($_POST['post_content'] ?? '');
+        $post_category = intval($_POST['post_category'] ?? 0);
+        if (empty($post_category)) wp_die('카테고리를 선택해야 합니다.');
+
+        $edit_post_id = isset($_POST['edit_post_id']) ? absint($_POST['edit_post_id']) : 0;
+
+        if ($edit_post_id) {
+            if (!current_user_can('edit_post', $edit_post_id)) wp_die('권한이 없습니다.');
+            $postarr = [
+                'ID'           => $edit_post_id,
+                'post_title'   => $post_title,
+                'post_content' => $post_content,
+                'post_category'=> [$post_category],
+            ];
+            $pid = wp_update_post($postarr, true);
+            if (!is_wp_error($pid)) {
+                set_transient('sfp_flash_' . get_current_user_id(), [
+                    'post_id' => $pid,
+                    'message' => '글이 성공적으로 수정되었습니다!',
+                ], 60);
+                wp_redirect(get_permalink($pid));
+                exit;
+            } else {
+                wp_die('수정 중 오류가 발생했습니다: ' . $pid->get_error_message());
+            }
+        } else {
+            $post_id = wp_insert_post([
+                'post_title'   => $post_title,
+                'post_content' => $post_content,
+                'post_status'  => 'publish', // 필요 시 'pending'으로 변경 가능
+                'post_author'  => get_current_user_id(),
+                'post_category'=> [$post_category],
+                'post_type'    => 'post',
+            ]);
+            if ($post_id) {
+                set_transient('sfp_flash_' . get_current_user_id(), [
+                    'post_id' => $post_id,
+                    'message' => '글이 성공적으로 발행되었습니다!',
+                ], 60);
+                wp_redirect(get_permalink($post_id));
+                exit;
+            } else {
+                wp_die('글 생성에 실패했습니다.');
+            }
+        }
+    }
+}
+add_action('init', 'sfp_handle_post_submission');
+
+// 성공 메시지 1회성 표시
+function enqueue_submission_message() {
+    if (!is_user_logged_in()) return;
+    $user_id = get_current_user_id();
+    $flash = get_transient('sfp_flash_' . $user_id);
+    if (!$flash || empty($flash['post_id'])) return;
+
+    $current_id = get_queried_object_id();
+    if ((int)$current_id !== (int)$flash['post_id']) return;
+
+    delete_transient('sfp_flash_' . $user_id);
+    $msg = !empty($flash['message']) ? $flash['message'] : '작업이 완료되었습니다.';
+
+    add_action('wp_footer', function() use ($msg) {
+        echo '<div id="sfp-success-message" style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#28a745;color:#fff;padding:15px;border-radius:5px;z-index:9999;transition:opacity .4s;">'.esc_html($msg).'</div>';
+        echo '<script>
+            (function(){
+                var el = document.getElementById("sfp-success-message");
+                if(!el) return;
+                setTimeout(function(){
+                    el.style.opacity = "0";
+                    setTimeout(function(){ if(el && el.parentNode){ el.parentNode.removeChild(el); } }, 500);
+                }, 4000);
+            })();
+        </script>';
+    });
+}
+add_action('wp', 'enqueue_submission_message');
